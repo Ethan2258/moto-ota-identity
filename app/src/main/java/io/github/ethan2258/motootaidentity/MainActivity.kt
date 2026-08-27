@@ -35,6 +35,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.ArrowDropDown
 import androidx.compose.material.icons.rounded.FileDownload
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.PhoneAndroid
@@ -51,6 +52,10 @@ import androidx.compose.material3.ButtonGroupMenuState
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExposedDropdownMenuAnchorType
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
@@ -121,6 +126,14 @@ private data class FieldSpec(
 private enum class NoticeKind { SAFE, INFO, ERROR, ACTIVE }
 
 private data class UiNotice(val text: String, val kind: NoticeKind)
+
+private val channelAliasOptions = listOf(
+    "" to "关闭",
+    "retgb" to "RETGB",
+    "teleu" to "TELEU",
+    "retapac" to "RETAPAC",
+    "reteu" to "RETEU",
+)
 
 private sealed interface UpdateUiState {
     data object Checking : UpdateUiState
@@ -199,10 +212,11 @@ private fun ProfileScreen() {
         }
     }
     var enabled by rememberSaveable { mutableStateOf(false) }
+    var channelAlias by rememberSaveable { mutableStateOf(OtaChannelAlias.DEFAULT) }
     var selectedSection by rememberSaveable { mutableIntStateOf(0) }
     var showErrors by rememberSaveable { mutableStateOf(false) }
     var notice by remember {
-        mutableStateOf(UiNotice("覆盖关闭，OTA 查询保持原样", NoticeKind.SAFE))
+        mutableStateOf(UiNotice("OTA 通道别名 RETGB 已启用", NoticeKind.ACTIVE))
     }
     var updateState by remember { mutableStateOf<UpdateUiState>(UpdateUiState.Checking) }
     val snackbarHostState = remember { SnackbarHostState() }
@@ -285,11 +299,14 @@ private fun ProfileScreen() {
         prefs.edit()
             .putString(ProfileContract.PREF_JSON, profile.toString())
             .putBoolean(ProfileContract.PREF_ENABLED, enabled)
+            .putString(ProfileContract.PREF_CHANNEL_ALIAS, channelAlias)
             .apply()
         notice = if (enabled) {
             UiNotice("身份覆盖已启用，仅对 Motorola OTA 查询生效", NoticeKind.ACTIVE)
+        } else if (channelAlias.isNotEmpty()) {
+            UiNotice("OTA 通道别名 ${channelAlias.uppercase()} 已启用", NoticeKind.ACTIVE)
         } else {
-            UiNotice("配置已保存，覆盖仍然关闭", NoticeKind.SAFE)
+            UiNotice("所有覆盖均已关闭，OTA 查询保持原样", NoticeKind.SAFE)
         }
         showMessage("已保存")
     }
@@ -297,18 +314,27 @@ private fun ProfileScreen() {
     fun disableOverride() {
         enabled = false
         prefs.edit().putBoolean(ProfileContract.PREF_ENABLED, false).apply()
-        notice = UiNotice("覆盖已关闭，OTA 查询保持原样", NoticeKind.SAFE)
-        showMessage("覆盖已关闭")
+        notice = if (channelAlias.isNotEmpty()) {
+            UiNotice("完整身份覆盖已关闭；通道别名 ${channelAlias.uppercase()} 保持启用", NoticeKind.ACTIVE)
+        } else {
+            UiNotice("所有覆盖均已关闭，OTA 查询保持原样", NoticeKind.SAFE)
+        }
+        showMessage("完整身份覆盖已关闭")
     }
 
     LaunchedEffect(Unit) {
         enabled = prefs.getBoolean(ProfileContract.PREF_ENABLED, false)
+        channelAlias = OtaChannelAlias.normalize(
+            prefs.getString(ProfileContract.PREF_CHANNEL_ALIAS, OtaChannelAlias.DEFAULT),
+        )
         try {
             populate(JSONObject(prefs.getString(ProfileContract.PREF_JSON, "{}") ?: "{}"))
             notice = if (enabled) {
                 UiNotice("身份覆盖已启用，仅对 Motorola OTA 查询生效", NoticeKind.ACTIVE)
+            } else if (channelAlias.isNotEmpty()) {
+                UiNotice("OTA 通道别名 ${channelAlias.uppercase()} 已启用", NoticeKind.ACTIVE)
             } else {
-                UiNotice("覆盖关闭，OTA 查询保持原样", NoticeKind.SAFE)
+                UiNotice("所有覆盖均已关闭，OTA 查询保持原样", NoticeKind.SAFE)
             }
         } catch (_: Exception) {
             enabled = false
@@ -364,7 +390,7 @@ private fun ProfileScreen() {
                         fontWeight = FontWeight.SemiBold,
                     )
                     Text(
-                        "只修改 com.motorola.ccc.ota 发出的设备选择 JSON。",
+                        "通道别名与身份覆盖只在 Motorola OTA 进程内生效。",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -376,6 +402,20 @@ private fun ProfileScreen() {
                     notice = notice,
                     completed = completedCount,
                     total = requiredCount,
+                )
+            }
+
+            item(key = "channel-alias") {
+                ChannelAliasSelector(
+                    value = channelAlias,
+                    onValueChange = {
+                        channelAlias = it
+                        notice = UiNotice(
+                            if (it.isEmpty()) "尚未保存；通道别名将关闭"
+                            else "尚未保存；OTA 将使用 ${it.uppercase()} 通道别名",
+                            NoticeKind.INFO,
+                        )
+                    },
                 )
             }
 
@@ -611,7 +651,7 @@ private fun StatusPanel(notice: UiNotice, completed: Int, total: Int) {
             )
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text(
-                    "$completed / $total 个必要字段",
+                    "donor 字段 $completed / $total",
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.SemiBold,
                 )
@@ -636,7 +676,7 @@ private fun OverrideSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit)
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text("查询身份覆盖", style = MaterialTheme.typography.titleMedium)
                 Text(
-                    if (checked) "保存后在限定作用域内生效" else "当前保持原始 OTA 请求",
+                    if (checked) "保存后在限定作用域内生效" else "当前不替换构建身份",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -660,10 +700,67 @@ private fun SafetyNotice() {
             modifier = Modifier.size(20.dp),
         )
         Text(
-            "所有字段必须来自同一台真实 RETEU donor。资料不完整时模块会拒绝启用。",
+            "通道别名不改写真实系统属性；完整身份覆盖仍要求同一台 donor 的一致数据。",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ChannelAliasSelector(value: String, onValueChange: (String) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    val selectedLabel = channelAliasOptions.firstOrNull { it.first == value }?.second ?: "关闭"
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = RoundedCornerShape(8.dp),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text("OTA 通道别名", style = MaterialTheme.typography.titleMedium)
+            ExposedDropdownMenuBox(
+                expanded = expanded,
+                onExpandedChange = { expanded = !expanded },
+            ) {
+                OutlinedTextField(
+                    value = selectedLabel,
+                    onValueChange = {},
+                    readOnly = true,
+                    modifier = Modifier
+                        .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
+                        .fillMaxWidth(),
+                    label = { Text("软件通道") },
+                    trailingIcon = {
+                        Icon(Icons.Rounded.ArrowDropDown, contentDescription = "选择软件通道")
+                    },
+                    shape = RoundedCornerShape(8.dp),
+                )
+                ExposedDropdownMenu(
+                    expanded = expanded,
+                    onDismissRequest = { expanded = false },
+                ) {
+                    channelAliasOptions.forEach { option ->
+                        DropdownMenuItem(
+                            text = { Text(option.second) },
+                            onClick = {
+                                onValueChange(option.first)
+                                expanded = false
+                            },
+                            contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding,
+                        )
+                    }
+                }
+            }
+            Text(
+                if (value.isEmpty()) "OTA 使用系统原始通道"
+                else "仅向 com.motorola.ccc.ota 报告 ${value.uppercase()}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 
@@ -746,7 +843,7 @@ private fun ActionBar(onValidate: () -> Unit, onSave: () -> Unit, onDisable: () 
             )
             clickableItem(
                 onClick = onDisable,
-                label = "关闭",
+                label = "停用",
                 icon = { Icon(Icons.Rounded.PowerSettingsNew, contentDescription = null) },
                 weight = 1f,
             )

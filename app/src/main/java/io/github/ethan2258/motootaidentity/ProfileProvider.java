@@ -10,7 +10,7 @@ import android.os.Binder;
 import android.os.Process;
 
 public final class ProfileProvider extends ContentProvider {
-    private static final String[] COLUMNS = {"enabled", "profile_json"};
+    private static final String[] COLUMNS = {"enabled", "profile_json", "channel_alias"};
 
     @Override
     public boolean onCreate() {
@@ -29,7 +29,8 @@ public final class ProfileProvider extends ContentProvider {
         MatrixCursor cursor = new MatrixCursor(COLUMNS, 1);
         cursor.addRow(new Object[]{
                 prefs.getBoolean(ProfileContract.PREF_ENABLED, false) ? 1 : 0,
-                prefs.getString(ProfileContract.PREF_JSON, "{}")
+                prefs.getString(ProfileContract.PREF_JSON, "{}"),
+                prefs.getString(ProfileContract.PREF_CHANNEL_ALIAS, OtaChannelAlias.DEFAULT)
         });
         return cursor;
     }

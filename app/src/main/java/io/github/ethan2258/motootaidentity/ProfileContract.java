@@ -13,6 +13,7 @@ public final class ProfileContract {
     public static final String PREFS = "profile";
     public static final String PREF_ENABLED = "enabled";
     public static final String PREF_JSON = "profile_json";
+    public static final String PREF_CHANNEL_ALIAS = "channel_alias";
 
     public static final String[] FIELDS = {
             "profileName",
