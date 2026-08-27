@@ -42,6 +42,9 @@ import androidx.compose.material.icons.rounded.PowerSettingsNew
 import androidx.compose.material.icons.rounded.Save
 import androidx.compose.material.icons.rounded.Security
 import androidx.compose.material.icons.rounded.Shield
+import androidx.compose.material.icons.rounded.SystemUpdateAlt
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Verified
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ButtonGroup
 import androidx.compose.material3.ButtonGroupMenuState
@@ -49,8 +52,11 @@ import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialExpressiveTheme
 import androidx.compose.material3.MaterialTheme
@@ -91,8 +97,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.BufferedReader
+import java.io.File
 import java.io.InputStreamReader
 
 private enum class ProfileSection(val title: String) {
@@ -112,6 +121,15 @@ private data class FieldSpec(
 private enum class NoticeKind { SAFE, INFO, ERROR, ACTIVE }
 
 private data class UiNotice(val text: String, val kind: NoticeKind)
+
+private sealed interface UpdateUiState {
+    data object Checking : UpdateUiState
+    data object Current : UpdateUiState
+    data class Available(val update: AvailableUpdate) : UpdateUiState
+    data class Downloading(val update: AvailableUpdate, val progress: Int) : UpdateUiState
+    data class Ready(val update: AvailableUpdate, val apk: File) : UpdateUiState
+    data object Error : UpdateUiState
+}
 
 private val fieldSpecs = listOf(
     FieldSpec("profileName", "配置名称", ProfileSection.BASIC, "例如：RETEU donor"),
@@ -140,6 +158,7 @@ private val fieldSpecs = listOf(
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        ProfileAccess.grantToTarget(this)
         enableEdgeToEdge()
         setContent { MotoOtaApp() }
     }
@@ -185,6 +204,7 @@ private fun ProfileScreen() {
     var notice by remember {
         mutableStateOf(UiNotice("覆盖关闭，OTA 查询保持原样", NoticeKind.SAFE))
     }
+    var updateState by remember { mutableStateOf<UpdateUiState>(UpdateUiState.Checking) }
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val requiredKeys = remember { ProfileContract.REQUIRED.toSet() }
@@ -196,6 +216,38 @@ private fun ProfileScreen() {
 
     fun showMessage(message: String) {
         scope.launch { snackbarHostState.showSnackbar(message) }
+    }
+
+    fun checkForUpdates() {
+        updateState = UpdateUiState.Checking
+        scope.launch {
+            updateState = try {
+                UpdateClient.checkLatest()?.let(UpdateUiState::Available) ?: UpdateUiState.Current
+            } catch (error: Exception) {
+                showMessage("更新检查失败：${error.message.orEmpty()}")
+                UpdateUiState.Error
+            }
+        }
+    }
+
+    fun downloadUpdate(update: AvailableUpdate) {
+        updateState = UpdateUiState.Downloading(update, 0)
+        scope.launch {
+            try {
+                val apk = UpdateClient.downloadVerified(context, update) { progress ->
+                    withContext(Dispatchers.Main) {
+                        updateState = UpdateUiState.Downloading(update, progress)
+                    }
+                }
+                updateState = UpdateUiState.Ready(update, apk)
+                if (!UpdateClient.requestInstall(context, apk)) {
+                    showMessage("允许此来源安装后，返回并点击安装")
+                }
+            } catch (error: Exception) {
+                updateState = UpdateUiState.Available(update)
+                showMessage("更新下载失败：${error.message.orEmpty()}")
+            }
+        }
     }
 
     fun profileJson(): JSONObject = JSONObject().also { json ->
@@ -263,6 +315,7 @@ private fun ProfileScreen() {
             prefs.edit().putBoolean(ProfileContract.PREF_ENABLED, false).apply()
             notice = UiNotice("保存的 JSON 无法解析，覆盖保持关闭", NoticeKind.ERROR)
         }
+        checkForUpdates()
     }
 
     Scaffold(
@@ -323,6 +376,19 @@ private fun ProfileScreen() {
                     notice = notice,
                     completed = completedCount,
                     total = requiredCount,
+                )
+            }
+
+            item(key = "update") {
+                UpdatePanel(
+                    state = updateState,
+                    onCheck = { checkForUpdates() },
+                    onDownload = { downloadUpdate(it) },
+                    onInstall = {
+                        if (!UpdateClient.requestInstall(context, it.apk)) {
+                            showMessage("允许此来源安装后，返回并点击安装")
+                        }
+                    },
                 )
             }
 
@@ -459,6 +525,60 @@ private fun ProfileScreen() {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun UpdatePanel(
+    state: UpdateUiState,
+    onCheck: () -> Unit,
+    onDownload: (AvailableUpdate) -> Unit,
+    onInstall: (UpdateUiState.Ready) -> Unit,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = RoundedCornerShape(8.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = if (state is UpdateUiState.Current) Icons.Rounded.Verified else Icons.Rounded.SystemUpdateAlt,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+            )
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("应用更新", style = MaterialTheme.typography.titleSmall)
+                when (state) {
+                    UpdateUiState.Checking -> Text("正在检查 GitHub Release", style = MaterialTheme.typography.bodySmall)
+                    UpdateUiState.Current -> Text("已是最新版本 ${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.bodySmall)
+                    is UpdateUiState.Available -> Text("发现 ${state.update.versionName}", style = MaterialTheme.typography.bodySmall)
+                    is UpdateUiState.Downloading -> {
+                        Text("正在下载 ${state.update.versionName} · ${state.progress}%", style = MaterialTheme.typography.bodySmall)
+                        LinearProgressIndicator(
+                            progress = { state.progress / 100f },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                    is UpdateUiState.Ready -> Text("${state.update.versionName} 已通过 SHA-256 校验", style = MaterialTheme.typography.bodySmall)
+                    UpdateUiState.Error -> Text("检查失败", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            when (state) {
+                is UpdateUiState.Available -> FilledTonalButton(onClick = { onDownload(state.update) }) {
+                    Text("更新")
+                }
+                is UpdateUiState.Ready -> FilledTonalButton(onClick = { onInstall(state) }) {
+                    Text("安装")
+                }
+                UpdateUiState.Error -> IconButton(onClick = onCheck) {
+                    Icon(Icons.Rounded.Refresh, contentDescription = "重新检查")
+                }
+                else -> Unit
             }
         }
     }

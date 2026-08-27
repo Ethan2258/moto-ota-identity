@@ -15,6 +15,7 @@
 - 从模块自身的只读 `ContentProvider` 获取配置；provider 只接受模块自身和 Motorola OTA UID。
 - 先验证整套 donor 配置，再在 JSON 副本上原子应用；任何异常都保留原始请求。
 - 应用入口不会出现在桌面，只能从 LSPosed 模块详情页打开。
+- 每次打开模块界面时自动检查 GitHub Release；新版 APK 下载后必须通过随 Release 发布的 SHA-256，再交给 Android 系统安装器确认。
 
 ## 它明确不会做什么
 
@@ -42,6 +43,16 @@
 4. 点击“检查”。确认 12 个必要字段完整后，再打开“查询身份覆盖”并保存。
 5. 在 LSPosed 中启用模块，作用域只能选择“摩托罗拉软件更新”（`com.motorola.ccc.ota`）。
 6. 结束并重新打开 Motorola 软件更新进程，让 Hook 在新进程中加载。无需重启整台手机。
+
+也可以通过 ADB 批量写入配置。接收器受系统 `android.permission.DUMP` 保护，普通第三方应用无权调用；输入仍会经过与界面相同的完整校验：
+
+```bash
+adb shell am broadcast \
+  -a io.github.ethan2258.motootaidentity.action.PROVISION_PROFILE \
+  -n io.github.ethan2258.motootaidentity/.ProfileProvisionReceiver \
+  --es profile_base64 BASE64_ENCODED_JSON \
+  --ez enabled true
+```
 
 “本机”按钮只用于读取当前设备作为格式参考。中国硬件刷入欧版系统后，这些本机值不等同于一台真实 RETEU donor，不能直接当作有效更新身份。
 
@@ -78,6 +89,17 @@ securityVersion
 
 release 构建启用了 R8 和资源裁剪。LSPosed 入口类通过 `app/proguard-rules.pro` 保留。
 
+每次 push 和 pull request 都会自动运行测试、Lint 与 APK 构建。推送与应用版本一致的 `vX.Y.Z` 标签后，Release 工作流会自动签名、生成 SHA-256 并发布 GitHub Release。仓库需要预先配置以下 GitHub Actions Secrets：
+
+```text
+ANDROID_KEYSTORE_BASE64
+ANDROID_KEYSTORE_PASSWORD
+ANDROID_KEY_ALIAS
+ANDROID_KEY_PASSWORD
+```
+
+签名私钥只能保存为加密 Secret，不能提交到仓库。后续版本必须继续使用同一把密钥，否则 Android 无法覆盖安装。应用不会静默使用 root 安装更新；最终安装始终由 Android 系统安装器确认。
+
 ## 开源许可
 
 MIT，见 [`LICENSE`](LICENSE)。本项目与 Motorola、Lenovo、Google 或 LSPosed 项目无隶属关系。修改 OTA 请求和跨区域固件组合存在风险，使用者应自行确认设备型号、源版本和恢复方案。
@@ -95,6 +117,7 @@ Moto OTA Identity is a narrowly scoped LSPosed module that overrides the device-
 - Validates a complete donor profile and applies it atomically to a copy of the original JSON.
 - Preserves the original request on disabled, invalid, unreadable, or exceptional paths.
 - Has no launcher icon; open it from the LSPosed module details screen.
+- Checks the latest GitHub Release when the module UI opens, verifies the downloaded APK against its published SHA-256, and then hands it to Android's package installer for confirmation.
 
 ### Non-goals
 
@@ -116,5 +139,7 @@ The “local device” action is only a formatting reference. Values read from C
 ```bash
 ./gradlew testDebugUnitTest lintDebug assembleDebug assembleRelease
 ```
+
+Pushes and pull requests are verified automatically. A matching `vX.Y.Z` tag triggers the signed GitHub Release workflow after the four signing secrets documented above have been configured. The private signing key must never be committed. Updates are not silently installed with root privileges; Android's package installer remains the final confirmation step.
 
 Licensed under the MIT License. This project is not affiliated with Motorola, Lenovo, Google, or LSPosed.
