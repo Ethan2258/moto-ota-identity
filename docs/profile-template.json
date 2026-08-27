@@ -1,0 +1,22 @@
+{
+  "profileName": "reteu-donor",
+  "carrier": "reteu",
+  "model": "",
+  "fingerprint": "",
+  "bootloaderVersion": "",
+  "radioVersion": "",
+  "buildDevice": "",
+  "buildId": "",
+  "buildDisplayId": "",
+  "buildIncrementalVersion": "",
+  "releaseVersion": "",
+  "otaSourceSha1": "",
+  "userLocation": "Non-CN",
+  "canonicalName": "",
+  "ro.mot.build.device": "",
+  "ro.mot.build.oem.product": "",
+  "ro.mot.build.system.product": "",
+  "ro.mot.build.product.increment": "",
+  "ro.mot.version": "",
+  "securityVersion": ""
+}
